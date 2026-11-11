@@ -6,25 +6,19 @@ set -Eeuo pipefail
 #   chmod +x install-n8n-vps.sh
 #   sudo ./install-n8n-vps.sh
 #
-# O script não altera containers existentes. Por padrão, cria um banco e usuário
-# próprios para o n8n no PostgreSQL exposto em 127.0.0.1:5432.
+# O script não altera containers existentes. Por padrão, cria um PostgreSQL
+# dedicado, em outro container e volume, exclusivo para o n8n.
 
 APP_DIR="${APP_DIR:-/opt/n8n}"
 N8N_DOMAIN="${N8N_DOMAIN:-n8n.revizeautocenter.shop}"
 N8N_DIRECT_PORT="${N8N_DIRECT_PORT:-5680}"
 N8N_DIRECT_BIND="${N8N_DIRECT_BIND:-127.0.0.1}"
-POSTGRES_HOST="${POSTGRES_HOST:-host.docker.internal}"
+POSTGRES_HOST="${POSTGRES_HOST:-postgres}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_DB="${POSTGRES_DB:-n8n}"
 POSTGRES_USER="${POSTGRES_USER:-n8n}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
 POSTGRES_SSL="${POSTGRES_SSL:-false}"
-POSTGRES_ADMIN_HOST="${POSTGRES_ADMIN_HOST:-127.0.0.1}"
-POSTGRES_ADMIN_PORT="${POSTGRES_ADMIN_PORT:-5432}"
-POSTGRES_ADMIN_DB="${POSTGRES_ADMIN_DB:-postgres}"
-POSTGRES_ADMIN_USER="${POSTGRES_ADMIN_USER:-}"
-POSTGRES_ADMIN_PASSWORD="${POSTGRES_ADMIN_PASSWORD:-}"
-CREATE_POSTGRES="${CREATE_POSTGRES:-1}"
 USE_CADDY="${USE_CADDY:-auto}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 
@@ -51,33 +45,6 @@ install_docker() {
 }
 
 random_hex() { openssl rand -hex 32; }
-
-provision_postgres() {
-  [[ "${CREATE_POSTGRES}" == "1" ]] || return 0
-
-  if [[ -z "${POSTGRES_ADMIN_USER}" ]]; then
-    read -r -p "Usuário administrador do PostgreSQL [postgres]: " POSTGRES_ADMIN_USER
-    POSTGRES_ADMIN_USER="${POSTGRES_ADMIN_USER:-postgres}"
-  fi
-  if [[ -z "${POSTGRES_ADMIN_PASSWORD}" ]]; then
-    read -r -s -p "Senha do administrador do PostgreSQL: " POSTGRES_ADMIN_PASSWORD
-    echo
-  fi
-  [[ -n "${POSTGRES_ADMIN_PASSWORD}" ]] || die "POSTGRES_ADMIN_PASSWORD não pode ficar vazio"
-
-  echo "Criando/verificando banco e usuário do n8n no PostgreSQL..."
-  docker run --rm --network host \
-    -e PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" \
-    postgres:17-alpine \
-    psql "host=${POSTGRES_ADMIN_HOST} port=${POSTGRES_ADMIN_PORT} dbname=${POSTGRES_ADMIN_DB} user=${POSTGRES_ADMIN_USER}" \
-    -v ON_ERROR_STOP=1 \
-    -v app_user="${POSTGRES_USER}" \
-    -v app_password="${POSTGRES_PASSWORD}" \
-    -v app_db="${POSTGRES_DB}" \
-    -c "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password') WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'app_user') \gexec" \
-    -c "SELECT format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'app_user', :'app_password') \gexec" \
-    -c "SELECT format('CREATE DATABASE %I OWNER %I', :'app_db', :'app_user') WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'app_db') \gexec"
-}
 
 write_files() {
   mkdir -p "${APP_DIR}/caddy_data" "${APP_DIR}/caddy_config"
@@ -116,6 +83,21 @@ EOF
 
   cat > "${APP_DIR}/compose.yml" <<'EOF'
 services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
     restart: unless-stopped
@@ -139,8 +121,9 @@ services:
       - TZ=${GENERIC_TIMEZONE}
     volumes:
       - n8n_data:/home/node/.n8n
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   caddy:
     image: caddy:2-alpine
@@ -158,6 +141,7 @@ services:
       - n8n
 
 volumes:
+  postgres_data:
   n8n_data:
   caddy_data:
   caddy_config:
@@ -232,8 +216,6 @@ main() {
   install_docker
   check_ports
   write_files
-  provision_postgres
-
   if [[ "${USE_CADDY}" == "0" ]]; then
     configure_nginx
   fi
@@ -244,7 +226,7 @@ main() {
     echo "Subindo n8n atrás do Nginx existente..."
   fi
   cd "${APP_DIR}"
-  docker compose --env-file .env -f compose.yml pull
+  docker compose --env-file .env -f compose.yml pull postgres n8n
   if [[ "${USE_CADDY}" == "1" ]]; then
     docker compose --env-file .env -f compose.yml up -d
   else
