@@ -25,6 +25,8 @@ POSTGRES_ADMIN_DB="${POSTGRES_ADMIN_DB:-postgres}"
 POSTGRES_ADMIN_USER="${POSTGRES_ADMIN_USER:-}"
 POSTGRES_ADMIN_PASSWORD="${POSTGRES_ADMIN_PASSWORD:-}"
 CREATE_POSTGRES="${CREATE_POSTGRES:-1}"
+USE_CADDY="${USE_CADDY:-auto}"
+CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 
 die() { echo "ERRO: $*" >&2; exit 1; }
 need_root() { [[ "${EUID}" -eq 0 ]] || die "execute com sudo"; }
@@ -170,29 +172,89 @@ EOF
 }
 
 check_ports() {
+  [[ "${USE_CADDY}" == "1" ]] || return 0
   command_exists ss || return 0
   if ss -ltn | awk '{print $4}' | grep -Eq "(:80|:443)$"; then
     echo "Aviso: a porta 80 ou 443 já está ocupada. Caddy não poderá iniciar até liberar o serviço existente."
   fi
 }
 
+configure_nginx() {
+  command_exists nginx || die "Nginx não foi encontrado"
+  if [[ -z "${CERTBOT_EMAIL}" ]]; then
+    read -r -p "E-mail para o certificado HTTPS do n8n: " CERTBOT_EMAIL
+  fi
+  [[ -n "${CERTBOT_EMAIL}" ]] || die "informe um e-mail para o Let's Encrypt"
+
+  local nginx_site="/etc/nginx/sites-available/${N8N_DOMAIN}"
+  local nginx_enabled="/etc/nginx/sites-enabled/${N8N_DOMAIN}"
+  cat > "${nginx_site}" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${N8N_DOMAIN};
+
+    location / {
+        proxy_pass http://127.0.0.1:${N8N_DIRECT_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600;
+    }
+}
+EOF
+  ln -sfn "${nginx_site}" "${nginx_enabled}"
+  nginx -t
+  systemctl reload nginx
+
+  if ! command_exists certbot; then
+    apt-get update
+    apt-get install -y certbot python3-certbot-nginx
+  fi
+  certbot --nginx --non-interactive --agree-tos --redirect \
+    -m "${CERTBOT_EMAIL}" -d "${N8N_DOMAIN}"
+}
+
 main() {
   need_root
   command_exists apt-get || die "este script pressupõe Debian/Ubuntu"
+  if [[ "${USE_CADDY}" == "auto" ]]; then
+    if command_exists nginx; then
+      USE_CADDY=0
+    else
+      USE_CADDY=1
+    fi
+  fi
   install_docker
   check_ports
   write_files
   provision_postgres
 
-  echo "Subindo n8n e Caddy..."
+  if [[ "${USE_CADDY}" == "0" ]]; then
+    configure_nginx
+  fi
+
+  if [[ "${USE_CADDY}" == "1" ]]; then
+    echo "Subindo n8n e Caddy..."
+  else
+    echo "Subindo n8n atrás do Nginx existente..."
+  fi
   cd "${APP_DIR}"
   docker compose --env-file .env -f compose.yml pull
-  docker compose --env-file .env -f compose.yml up -d
+  if [[ "${USE_CADDY}" == "1" ]]; then
+    docker compose --env-file .env -f compose.yml up -d
+  else
+    docker compose --env-file .env -f compose.yml up -d n8n
+  fi
 
   echo
   echo "Instalação concluída."
   echo "URL: https://${N8N_DOMAIN}"
-  echo "Porta direta local: ${N8N_DIRECT_BIND}:${N8N_DIRECT_PORT}"
+  echo "Porta interna: ${N8N_DIRECT_BIND}:${N8N_DIRECT_PORT}"
   echo "Logs: cd ${APP_DIR} && docker compose logs -f n8n"
   echo
   echo "Antes de acessar, crie o DNS A ${N8N_DOMAIN} apontando para o IP desta VPS."
