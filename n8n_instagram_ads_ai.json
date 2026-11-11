@@ -1,0 +1,1382 @@
+{
+  "name": "AI Instagram Ads - IA + Aprovacao + Meta + Monitoramento",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-ads/briefing",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "c579791f-b4f7-4263-b0aa-894a420bd673",
+      "name": "WEBHOOK - Novo briefing",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const b=$input.first().json.body||{}; const secret=$input.first().json.headers?.['x-ads-secret'];if(!secret||secret!==$env.ADS_WEBHOOK_SECRET)throw Error('Unauthorized');const title=String(b.nome||'').trim();const product=String(b.produto||'').trim();const url=String(b.url||'').trim();const budget=Number(b.orcamento_diario||0);if(!title||!product||!/^https:\\/\\//.test(url)||!Number.isFinite(budget)||budget<10||budget>1000)throw Error('Briefing invalido; orcamento entre R$10 e R$1000');const id='ads-'+$execution.id;const obj={id,nome:title,produto:product,url,orcamento_diario:budget,objetivo:'OUTCOME_TRAFFIC',pais:'BR',idade_min:21,idade_max:60,publico:String(b.publico||'adultos interessados no produto'),cidade:String(b.cidade||'Brasil'),pagina_id:String(b.pagina_id||$env.META_PAGE_ID||''),instagram_actor_id:String(b.instagram_actor_id||$env.META_INSTAGRAM_ACTOR_ID||''),conta:String(b.conta||$env.META_AD_ACCOUNT_ID||'').replace(/^act_/,''),tipo_midia:['image','video'].includes(b.tipo_midia)?b.tipo_midia:'image'};if(!/^\\d+$/.test(obj.pagina_id)||!/^\\d+$/.test(obj.conta))throw Error('IDs de pagina e conta faltando');return [{json:obj}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "43270e16-6361-4962-83ac-88d2cbf2ca4a",
+      "name": "Validar briefing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.OPENAI_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model:\"gpt-4.1-mini\",response_format:{type:\"json_object\"},messages:[{role:\"system\",content:\"Crie anuncio verdadeiro e conforme politicas Meta, sem promessas enganosas. Retorne JSON com keys headline, primary_text, image_prompt, video_prompt. Tudo em pt-BR. image_prompt em ingles, sem texto dentro da imagem. video_prompt em ingles, video comercial sem marcas inventadas.\"},{role:\"user\",content:JSON.stringify($(\"Validar briefing\").first().json)}]}) }}"
+      },
+      "id": "6fc68280-6fdd-40da-a1ba-cbe902b8230d",
+      "name": "IA - Gerar copy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const b=$('Validar briefing').first().json;const raw=$input.first().json.choices?.[0]?.message?.content;if(!raw)throw Error('IA sem resposta');const c=JSON.parse(raw);for(const k of ['headline','primary_text','image_prompt','video_prompt'])if(!c[k])throw Error('Campo IA faltando '+k);return [{json:{...b,copy:c}}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "215d5c23-58ca-4e75-956b-d60d9680e36e",
+      "name": "Interpretar criativos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/images/generations",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.OPENAI_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model:\"gpt-image-2.5-flare\",prompt:$(\"Interpretar criativos\").first().json.copy.image_prompt,size:\"1024x1024\",quality:\"medium\",n:1}) }}"
+      },
+      "id": "848ffeab-d149-41f7-8eaa-7de6702cc5d5",
+      "name": "IA - Gerar imagem",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const b=$('Interpretar criativos').first().json;const img=$input.first().json.data?.[0]?.b64_json;if(!img)throw Error('Imagem IA nao retornada');return [{json:{...b,image_b64:img}}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "b4755b42-3dee-4354-b96d-5b7b155dc578",
+      "name": "Consolidar imagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ai_ads (id,nome,briefing,copy,image_b64,status) VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,'DRAFT') ON CONFLICT (id) DO NOTHING RETURNING id,status",
+        "options": {
+          "queryReplacement": "={{ [$(\"Consolidar imagem\").first().json.id,$(\"Consolidar imagem\").first().json.nome,JSON.stringify((( {image_b64,copy,...other})=>other)($(\"Consolidar imagem\").first().json)) ,JSON.stringify($(\"Consolidar imagem\").first().json.copy),$(\"Consolidar imagem\").first().json.image_b64] }}"
+        }
+      },
+      "id": "f5916b72-2b67-442e-aa04-25b0ba42ea06",
+      "name": "Salvar rascunho",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://queue.fal.run/fal-ai/ovi",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Key {{$env.FAL_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({prompt:$(\"Interpretar criativos\").first().json.copy.video_prompt,resolution:\"512x960\",enable_safety_checker:true}) }}"
+      },
+      "id": "4d2c9055-884e-44ab-a117-2effeba559ca",
+      "name": "Video IA - Enfileirar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ai_ads SET video_request_id=$2,video_status='IN_QUEUE',updated_at=now() WHERE id=$1 RETURNING id,status,video_status",
+        "options": {
+          "queryReplacement": "={{ [$(\"Validar briefing\").first().json.id,$(\"Video IA - Enfileirar\").first().json.request_id] }}"
+        }
+      },
+      "id": "68194ea9-8481-49a7-8bf9-22070249288d",
+      "name": "Salvar fila de video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-ads/approve",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "4f60ba4d-e5ca-468c-8dbd-3a3493133df5",
+      "name": "WEBHOOK - Aprovar",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const q=$input.first().json; if(!q.headers?.['x-ads-secret']||q.headers['x-ads-secret']!==$env.ADS_WEBHOOK_SECRET)throw Error('Unauthorized');const id=String(q.body?.id||'');if(!/^ads-\\d+$/.test(id)||q.body?.aprovar!==true)throw Error('Informe id valido e aprovar=true');return [{json:{id}}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "08d2c6d9-a13b-452d-b215-96609b8d83d4",
+      "name": "Validar aprovacao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ai_ads SET status='PUBLISHING',updated_at=now() WHERE id=$1 AND status='DRAFT' RETURNING id,briefing,copy,image_b64,video_url,status",
+        "options": {
+          "queryReplacement": "={{ [$(\"Validar aprovacao\").first().json.id] }}"
+        }
+      },
+      "id": "2df6a07d-cdc0-45db-88f3-6f954c71c8f0",
+      "name": "Reservar publicacao",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r=$input.first()?.json;if(!r?.id)throw Error('Nao encontrado ou ja aprovado/publicado');if(!r.image_b64)throw Error('Imagem ausente');if(r.briefing.tipo_midia==='video'&&!r.video_url)throw Error('Video ainda nao pronto; corrija status PUBLISHING para DRAFT antes de tentar novamente');return [{json:r}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "6bd1ac66-4f6e-4bbc-bc61-a5028ae91647",
+      "name": "Exigir rascunho",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/act_\" + $(\"Exigir rascunho\").first().json.briefing.conta + \"/campaigns\" }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({name:$(\"Exigir rascunho\").first().json.briefing.nome,objective:\"OUTCOME_TRAFFIC\",status:\"PAUSED\",special_ad_categories:[],is_adset_budget_sharing_enabled:false}) }}"
+      },
+      "id": "ab14ecb9-982d-40dd-a1fb-a609ebb067ee",
+      "name": "META - Criar campanha",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/act_\" + $(\"Exigir rascunho\").first().json.briefing.conta + \"/adsets\" }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({name:\"Conjunto - \" + $(\"Exigir rascunho\").first().json.briefing.nome,campaign_id:$(\"META - Criar campanha\").first().json.id,daily_budget:Math.round($(\"Exigir rascunho\").first().json.briefing.orcamento_diario*100),billing_event:\"IMPRESSIONS\",optimization_goal:\"LINK_CLICKS\",destination_type:\"WEBSITE\",bid_strategy:\"LOWEST_COST_WITHOUT_CAP\",status:\"PAUSED\",targeting:{geo_locations:{countries:[\"BR\"]},age_min:$(\"Exigir rascunho\").first().json.briefing.idade_min,age_max:$(\"Exigir rascunho\").first().json.briefing.idade_max,publisher_platforms:[\"instagram\"],instagram_positions:[\"stream\",\"story\",\"reels\"]}}) }}"
+      },
+      "id": "037d9d16-d943-4aa6-8d73-92c821bfb070",
+      "name": "META - Criar conjunto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "d98b98b1-b159-44f8-8167-c4c42d172111",
+              "leftValue": "={{ $(\"Exigir rascunho\").first().json.briefing.tipo_midia }}",
+              "rightValue": "video",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "acb59f32-da62-43d5-af0a-474ff66f8b4c",
+      "name": "Midia video?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/act_\" + $(\"Exigir rascunho\").first().json.briefing.conta + \"/advideos\" }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({file_url:$(\"Exigir rascunho\").first().json.video_url,name:$(\"Exigir rascunho\").first().json.briefing.nome}) }}"
+      },
+      "id": "705eacf5-0c66-4416-af33-c9bef36f8464",
+      "name": "META - Upload video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        310
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/act_\" + $(\"Exigir rascunho\").first().json.briefing.conta + \"/adcreatives\" }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({name:\"Criativo video\",object_story_spec:{page_id:$(\"Exigir rascunho\").first().json.briefing.pagina_id,instagram_actor_id:$(\"Exigir rascunho\").first().json.briefing.instagram_actor_id||undefined,video_data:{video_id:$(\"META - Upload video\").first().json.id,message:$(\"Exigir rascunho\").first().json.copy.primary_text,title:$(\"Exigir rascunho\").first().json.copy.headline,call_to_action:{type:\"LEARN_MORE\",value:{link:$(\"Exigir rascunho\").first().json.briefing.url}}}}}) }}"
+      },
+      "id": "df15d07d-ba91-4a29-8f6b-6e9a99a7a596",
+      "name": "META - Criativo video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        310
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/act_\" + $(\"Exigir rascunho\").first().json.briefing.conta + \"/adimages\" }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({bytes:$(\"Exigir rascunho\").first().json.image_b64,name:$(\"Exigir rascunho\").first().json.briefing.nome}) }}"
+      },
+      "id": "29bff596-60c7-4bf5-ae51-a0f340c65279",
+      "name": "META - Upload imagem",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const images=$input.first().json.images||{};const i=Object.values(images)[0];if(!i?.hash)throw Error('Hash Meta nao retornado');return [{json:{hash:i.hash}}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "f039740b-ebda-49fc-96cc-89b56ffd6260",
+      "name": "Extrair hash imagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/act_\" + $(\"Exigir rascunho\").first().json.briefing.conta + \"/adcreatives\" }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({name:\"Criativo imagem\",object_story_spec:{page_id:$(\"Exigir rascunho\").first().json.briefing.pagina_id,instagram_actor_id:$(\"Exigir rascunho\").first().json.briefing.instagram_actor_id||undefined,link_data:{link:$(\"Exigir rascunho\").first().json.briefing.url,image_hash:$(\"Extrair hash imagem\").first().json.hash,message:$(\"Exigir rascunho\").first().json.copy.primary_text,name:$(\"Exigir rascunho\").first().json.copy.headline,call_to_action:{type:\"LEARN_MORE\",value:{link:$(\"Exigir rascunho\").first().json.briefing.url}}}}}) }}"
+      },
+      "id": "cb370f23-a6a2-4b7f-8265-d443a5be1445",
+      "name": "META - Criativo imagem",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/act_\" + $(\"Exigir rascunho\").first().json.briefing.conta + \"/ads\" }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({name:$(\"Exigir rascunho\").first().json.briefing.nome+\" - Video\",adset_id:$(\"META - Criar conjunto\").first().json.id,creative:{creative_id:$(\"META - Criativo video\").first().json.id},status:\"PAUSED\"}) }}"
+      },
+      "id": "cadde4dd-5d3d-4de2-b981-a41f3bbc5838",
+      "name": "META - Anuncio video PAUSED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        310
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/act_\" + $(\"Exigir rascunho\").first().json.briefing.conta + \"/ads\" }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({name:$(\"Exigir rascunho\").first().json.briefing.nome+\" - Imagem\",adset_id:$(\"META - Criar conjunto\").first().json.id,creative:{creative_id:$(\"META - Criativo imagem\").first().json.id},status:\"PAUSED\"}) }}"
+      },
+      "id": "332b7db2-9b40-4eaa-b89d-63f2de16202a",
+      "name": "META - Anuncio imagem PAUSED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ai_ads SET status='READY_PAUSED',meta_campaign_id=$2,meta_adset_id=$3,meta_ad_id=$4,updated_at=now() WHERE id=$1 RETURNING id,status,meta_campaign_id,meta_ad_id",
+        "options": {
+          "queryReplacement": "={{ [$(\"Exigir rascunho\").first().json.id,$(\"META - Criar campanha\").first().json.id,$(\"META - Criar conjunto\").first().json.id,$(\"META - Anuncio video PAUSED\").first().json.id] }}"
+        }
+      },
+      "id": "4d57a7d8-15f1-4a53-b8e1-759e67e708d1",
+      "name": "Salvar IDs campanha video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2200,
+        310
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ai_ads SET status='READY_PAUSED',meta_campaign_id=$2,meta_adset_id=$3,meta_ad_id=$4,updated_at=now() WHERE id=$1 RETURNING id,status,meta_campaign_id,meta_ad_id",
+        "options": {
+          "queryReplacement": "={{ [$(\"Exigir rascunho\").first().json.id,$(\"META - Criar campanha\").first().json.id,$(\"META - Criar conjunto\").first().json.id,$(\"META - Anuncio imagem PAUSED\").first().json.id] }}"
+        }
+      },
+      "id": "0525dac6-7135-4efe-b23f-c6621e882182",
+      "name": "Salvar IDs campanha imagem",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2420,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-ads/activate",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "c99d418c-d9d6-4d3e-a5ea-3a4c30bb886a",
+      "name": "WEBHOOK - Ativar",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const q=$input.first().json;if(q.headers?.['x-ads-secret']!==$env.ADS_WEBHOOK_SECRET)throw Error('Unauthorized');const id=String(q.body?.id||'');if(!/^ads-\\d+$/.test(id)||q.body?.ativar!==true)throw Error('id e ativar=true obrigatorios');return [{json:{id}}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "ddcc6391-fac7-4420-b09e-a114b2c46243",
+      "name": "Validar ativacao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id,meta_campaign_id,meta_adset_id,meta_ad_id,status FROM ai_ads WHERE id=$1 AND status='READY_PAUSED'",
+        "options": {
+          "queryReplacement": "={{ [$(\"Validar ativacao\").first().json.id] }}"
+        }
+      },
+      "id": "29b75bc0-7359-4552-86c9-15ace82e9f1a",
+      "name": "Buscar anuncio pronto",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const a=$input.first()?.json;if(!a?.meta_ad_id)throw Error('Anuncio nao esta pronto para ativacao');return [{json:a}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "decf07b9-bdfa-4e86-8f42-548943ba4f26",
+      "name": "Validar ID ativar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/\" + $(\"Validar ID ativar\").first().json.meta_adset_id }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({status:\"ACTIVE\"})}}"
+      },
+      "id": "859c0e3e-eb88-4aa0-b1c1-09256a69d655",
+      "name": "META - Ativar conjunto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/\" + $(\"Validar ID ativar\").first().json.meta_campaign_id }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({status:\"ACTIVE\"})}}"
+      },
+      "id": "02166910-a4ba-424f-9141-d6ad8206fe37",
+      "name": "META - Ativar campanha",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/\" + $(\"Validar ID ativar\").first().json.meta_ad_id }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({status:\"ACTIVE\"})}}"
+      },
+      "id": "6f84f9c1-d83e-4ce9-8566-4ab80e4ba98f",
+      "name": "META - Ativar anuncio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ai_ads SET status='ACTIVE',updated_at=now() WHERE id=$1 RETURNING id,status,meta_campaign_id",
+        "options": {
+          "queryReplacement": "={{ [$(\"Validar ID ativar\").first().json.id] }}"
+        }
+      },
+      "id": "de36a694-b20c-4b34-bb3d-22f4df820cd1",
+      "name": "Marcar ativo",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1540,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "f2d23b32-da43-4cad-93f9-2276e9308d72",
+      "name": "CRON - Monitorar",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        1300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id,meta_campaign_id FROM ai_ads WHERE status='ACTIVE' AND meta_campaign_id IS NOT NULL LIMIT 100",
+        "options": {
+          "queryReplacement": "={{ [] }}"
+        }
+      },
+      "id": "9eb1cd8a-c4cd-41bf-af86-0b54f6927878",
+      "name": "Buscar campanhas ativas",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        1300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ \"https://graph.facebook.com/\" + ($env.META_GRAPH_VERSION||\"v24.0\") + \"/\" + $json.meta_campaign_id + \"/insights?fields=campaign_id,impressions,clicks,spend,ctr,cpc,actions&date_preset=last_7d\" }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.META_ACCESS_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "id": "9379c7cf-a8fa-49fe-964d-9e1293fc6aa9",
+      "name": "META - Insights",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        1300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ai_ads SET latest_insights=$2::jsonb,updated_at=now() WHERE meta_campaign_id=$1 RETURNING id,status,latest_insights",
+        "options": {
+          "queryReplacement": "={{ [String($json.data?.[0]?.campaign_id||\"\"),JSON.stringify($json.data?.[0]||{})] }}"
+        }
+      },
+      "id": "1cf43b03-e060-43f5-bb54-54d9321a2981",
+      "name": "Salvar relatorio",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        1300
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "39513a63-1868-484a-a5a0-34e60cf779d5",
+      "name": "CRON - Videos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id,video_request_id FROM ai_ads WHERE video_status='IN_QUEUE' AND video_request_id IS NOT NULL LIMIT 100",
+        "options": {
+          "queryReplacement": "={{ [] }}"
+        }
+      },
+      "id": "2bae6c10-5e0f-4e52-a20e-63e7e15d138e",
+      "name": "Buscar videos pendentes",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ \"https://queue.fal.run/fal-ai/ovi/requests/\" + $json.video_request_id + \"/status\" }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Key {{$env.FAL_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "450ecb70-c344-4a7c-bdac-1d9308a36f6d",
+      "name": "FAL - Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "901db625-5d55-4d38-9af0-64c2679cf94d",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "COMPLETED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "e56cc841-4593-4bb4-ba01-ab078b23f15c",
+      "name": "Video concluido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ \"https://queue.fal.run/fal-ai/ovi/requests/\" + $(\"Buscar videos pendentes\").item.json.video_request_id }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Key {{$env.FAL_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "1ca7ee12-4d4c-49a1-8a54-656ddbdfd77b",
+      "name": "FAL - Resultado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ai_ads SET video_url=$2,video_status='READY',updated_at=now() WHERE id=$1 RETURNING id,video_url,video_status",
+        "options": {
+          "queryReplacement": "={{ [$(\"Buscar videos pendentes\").item.json.id,$json.video?.url||\"\"] }}"
+        }
+      },
+      "id": "ccdbdf8a-f4d7-4c32-81c0-1b42c5fc06e2",
+      "name": "Salvar URL video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1100,
+        1600
+      ]
+    }
+  ],
+  "connections": {
+    "WEBHOOK - Novo briefing": {
+      "main": [
+        [
+          {
+            "node": "Validar briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar briefing": {
+      "main": [
+        [
+          {
+            "node": "IA - Gerar copy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IA - Gerar copy": {
+      "main": [
+        [
+          {
+            "node": "Interpretar criativos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpretar criativos": {
+      "main": [
+        [
+          {
+            "node": "IA - Gerar imagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IA - Gerar imagem": {
+      "main": [
+        [
+          {
+            "node": "Consolidar imagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar imagem": {
+      "main": [
+        [
+          {
+            "node": "Salvar rascunho",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar rascunho": {
+      "main": [
+        [
+          {
+            "node": "Video IA - Enfileirar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Video IA - Enfileirar": {
+      "main": [
+        [
+          {
+            "node": "Salvar fila de video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WEBHOOK - Aprovar": {
+      "main": [
+        [
+          {
+            "node": "Validar aprovacao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar aprovacao": {
+      "main": [
+        [
+          {
+            "node": "Reservar publicacao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reservar publicacao": {
+      "main": [
+        [
+          {
+            "node": "Exigir rascunho",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exigir rascunho": {
+      "main": [
+        [
+          {
+            "node": "META - Criar campanha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Criar campanha": {
+      "main": [
+        [
+          {
+            "node": "META - Criar conjunto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Criar conjunto": {
+      "main": [
+        [
+          {
+            "node": "Midia video?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Midia video?": {
+      "main": [
+        [
+          {
+            "node": "META - Upload video",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "META - Upload imagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Upload video": {
+      "main": [
+        [
+          {
+            "node": "META - Criativo video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Criativo video": {
+      "main": [
+        [
+          {
+            "node": "META - Anuncio video PAUSED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Anuncio video PAUSED": {
+      "main": [
+        [
+          {
+            "node": "Salvar IDs campanha video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Upload imagem": {
+      "main": [
+        [
+          {
+            "node": "Extrair hash imagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair hash imagem": {
+      "main": [
+        [
+          {
+            "node": "META - Criativo imagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Criativo imagem": {
+      "main": [
+        [
+          {
+            "node": "META - Anuncio imagem PAUSED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Anuncio imagem PAUSED": {
+      "main": [
+        [
+          {
+            "node": "Salvar IDs campanha imagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WEBHOOK - Ativar": {
+      "main": [
+        [
+          {
+            "node": "Validar ativacao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar ativacao": {
+      "main": [
+        [
+          {
+            "node": "Buscar anuncio pronto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar anuncio pronto": {
+      "main": [
+        [
+          {
+            "node": "Validar ID ativar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar ID ativar": {
+      "main": [
+        [
+          {
+            "node": "META - Ativar conjunto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Ativar conjunto": {
+      "main": [
+        [
+          {
+            "node": "META - Ativar campanha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Ativar campanha": {
+      "main": [
+        [
+          {
+            "node": "META - Ativar anuncio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Ativar anuncio": {
+      "main": [
+        [
+          {
+            "node": "Marcar ativo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRON - Monitorar": {
+      "main": [
+        [
+          {
+            "node": "Buscar campanhas ativas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar campanhas ativas": {
+      "main": [
+        [
+          {
+            "node": "META - Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "META - Insights": {
+      "main": [
+        [
+          {
+            "node": "Salvar relatorio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRON - Videos": {
+      "main": [
+        [
+          {
+            "node": "Buscar videos pendentes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar videos pendentes": {
+      "main": [
+        [
+          {
+            "node": "FAL - Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FAL - Status": {
+      "main": [
+        [
+          {
+            "node": "Video concluido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Video concluido?": {
+      "main": [
+        [
+          {
+            "node": "FAL - Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FAL - Resultado": {
+      "main": [
+        [
+          {
+            "node": "Salvar URL video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}
